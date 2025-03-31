@@ -35,7 +35,7 @@ async def root():
     logger.info("Root endpoint '/' accessed.")
     return {"greeting": "Hello, World!", "message": "Welcome to FastAPI!"}
 
-@app_fastapi.post("/api/generate-image")
+@app.post("/api/generate-image")
 async def generate_image(prompt: str, aspect_ratio: str):
     """
     Generates an image using the Replicate API.
