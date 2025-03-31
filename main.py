@@ -35,18 +35,15 @@ async def root():
     logger.info("Root endpoint '/' accessed.")
     return {"greeting": "Hello, World!", "message": "Welcome to FastAPI!"}
 
-@app.post("/api/generate-image")
+@app_fastapi.post("/api/generate-image")
 async def generate_image(prompt: str, aspect_ratio: str):
     """
-    Generates an image using the Replicate API based on a prompt and aspect ratio.
-    Assumes replicate.run successfully returns a URL or list of URLs.
+    Generates an image using the Replicate API.
+    Attempts to force the result to string at the return statement.
     """
-
-    # Directly call replicate.run - assumes it succeeds and returns the desired URL(s)
-    # Removed the try/except block and the redundant/overwritten second call
-    # from the original code.
-    output_url = replicate.run(
-        "black-forest-labs/flux-1.1-pro", # Using the first model specified in original code
+    # Assuming replicate.run returns something that *should* represent the URL
+    output = replicate.run(
+        "black-forest-labs/flux-1.1-pro",
         input={
             "prompt": prompt,
             "aspect_ratio": aspect_ratio,
@@ -54,12 +51,24 @@ async def generate_image(prompt: str, aspect_ratio: str):
             "output_quality": 80,
             "safety_tolerance": 2,
             "prompt_upsampling": True
-            # Note: Ensure these input parameters match the specific model's requirements
         }
     )
 
-    # Handle response (assuming 'output_url' is the URL string or list from Replicate)
-    return {"img": output_url}
+    # Assign the output directly. If this 'output' is a list or other
+    # non-JSON-serializable type, the error occurs at the 'return' below.
+    image_url = output
+
+    # --- Change is ONLY here ---
+    # Force conversion to string directly within the return statement.
+    # This might mask the underlying issue if image_url is not a string.
+    try:
+        return {"img": str(image_url)}
+    except Exception as e:
+        # Add a catch specifically around the return/conversion
+        # in case str() itself fails on a very unusual type.
+        print(f"Error during final conversion/return: {e}")
+        print(f"Value that failed conversion: {image_url} (Type: {type(image_url)})")
+        raise HTTPException(status_code=500, detail=f"Failed to format the final response: {e}")
 
 
 
