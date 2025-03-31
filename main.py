@@ -21,14 +21,12 @@ async def root():
     return {"greeting": "Hello, World!", "message": "Welcome to FastAPI!"}
 
 
-@app.post("/generate")
-async def generate_image(
-    request: generateRequest,
-):
+@app.get("/generate")
+async def generate_image(prompt: str, aspect_ratio: str):
 
     input = {
-            "prompt": request.prompt,
-            "aspect_ratio": request.aspect_ratio,
+            "prompt": prompt,
+            "aspect_ratio": aspect_ratio,
             "output_format": "png",
             "output_quality": 80,
             "safety_tolerance": 2,
