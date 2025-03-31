@@ -84,7 +84,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 origins = [
     "http://localhost:3000",
-    "http://localhost:5173",
+    "http://localhost:8081",
     # Add your Deployed Frontend URL(s) here!
     # e.g., "https://your-frontend.on.railway.app",
     # e.g., "https://your-app.vercel.app"
