@@ -38,14 +38,10 @@ async def root():
 @app.post("/api/generate-image")
 async def generate_image(prompt: str, aspect_ratio: str):
     """
-    Generates an image using Replicate and returns the image URL.
-    Assumes replicate.run returns a string URL or a list containing one URL string.
+    Generates an image using the Replicate API.
+    Attempts to force the result to string at the return statement.
     """
-    logger.info(f"Received image generation request: prompt='{prompt}', aspect_ratio='{aspect_ratio}'")
-
-    # Call Replicate API
-    # If this call fails (network, API key, Replicate error), FastAPI will
-    # return a 500 Internal Server Error by default, as error catching was removed.
+    # Assuming replicate.run returns something that *should* represent the URL
     output = replicate.run(
         "black-forest-labs/flux-1.1-pro",
         input={
@@ -58,35 +54,26 @@ async def generate_image(prompt: str, aspect_ratio: str):
         }
     )
 
-    logger.info(f"Replicate output received (type: {type(output)}): {output}")
+    # Assign the output directly. If this 'output' is a list or other
+    # non-JSON-serializable type, the error occurs at the 'return' below.
+    image_url = output
 
-    # --- Robust handling based on previous debugging ---
-    # Handle potential list output from Replicate cleanly
-    final_url = None
-    if isinstance(output, list):
-        if output and isinstance(output[0], str):
-             final_url = output[0] # Extract URL if it's a list of strings
-        else:
-            logger.error(f"Replicate returned a list, but it was empty or first item wasn't a string: {output}")
-    elif isinstance(output, str):
-        final_url = output # Assume it's the URL string directly
-    else:
-        logger.error(f"Replicate returned an unexpected data type: {type(output)}")
+    # --- Change is ONLY here ---
+    # Force conversion to string directly within the return statement.
+    # This might mask the underlying issue if image_url is not a string.
+    try:
+        return {"img": str(image_url)}
+    except Exception as e:
+        # Add a catch specifically around the return/conversion
+        # in case str() itself fails on a very unusual type.
+        print(f"Error during final conversion/return: {e}")
+        print(f"Value that failed conversion: {image_url} (Type: {type(image_url)})")
+        raise HTTPException(status_code=500, detail=f"Failed to format the final response: {e}")
 
-    # If we still don't have a valid string URL, raise an error
-    if not isinstance(final_url, str):
-         logger.error(f"Failed to extract a valid string URL from Replicate response: {output}")
-         # This HTTPException is for *processing* the response, not the call itself
-         raise HTTPException(
-             status_code=500,
-             detail="Image generated, but couldn't process the response format from Replicate."
-         )
-    # --- End robust handling ---
 
-    logger.info(f"Returning image URL: {final_url}")
-
-    # Return the result directly assuming 'final_url' is now a string URL
-    return {"img": final_url}
+if __name__ == "__main__":
+    print("Starting FastAPI server on http://0.0.0.0:8000")
+    uvicorn.run(app_fastapi, host="0.0.0.0", port=8000)
 
 
 
