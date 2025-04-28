@@ -1,26 +1,39 @@
 # ... (imports and setup remain the same) ...
-
-from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import replicate
-from dotenv import load_dotenv
-import os
 import logging
-from typing import Union, List, Any
 import uvicorn
-from fastapi.middleware.cors import CORSMiddleware
+# main.py
+import os
+import stripe # type: ignore # Ignore type error if stripe package typing is missing
+from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi.middleware.cors import CORSMiddleware # Import CORS middleware
+from dotenv import load_dotenv
+from typing import List, Dict, Any, Annotated
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Load Env Vars ---
+# --- Load Environment Variables ---
 load_dotenv()
+STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
+
+if not STRIPE_SECRET_KEY:
+    print("🔴 FATAL ERROR: Stripe Secret Key not found in .env file.")
+    exit(1) # Exit if key is missing
+
+# --- Initialize Stripe ---
+stripe.api_key = STRIPE_SECRET_KEY
+print("✅ Stripe API Key Loaded.")
+
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 if not REPLICATE_API_TOKEN:
     logger.error("REPLICATE_API_TOKEN environment variable not set!")
 else:
     logger.info("Replicate API token found.")
+
+
 
 # --- FastAPI App ---
 app = FastAPI()
@@ -29,6 +42,14 @@ app = FastAPI()
 class GenerateRequest(BaseModel):
     prompt: str
     aspect_ratio: str
+
+# --- Helper Function ---
+def calculate_order_amount_cents(total_price_euros: float) -> int:
+    """Converts a price in Euros (float) to cents (integer)."""
+    # Ensure price is positive before calculation
+    if total_price_euros <= 0:
+        raise ValueError("Total price must be positive.")
+    return int(round(total_price_euros * 100)) # Use round for better precision
 
 # --- Root Endpoint ---
 @app.get("/")
@@ -136,6 +157,110 @@ async def generate_multiple_images(request: GenerateRequest):
 
     # Return the list of successfully generated image URLs
     return {"images": image_urls}
+
+# This should ideally verify prices against a database in a real app
+@app.post("/create-payment-intent")
+async def create_payment_intent(
+    # Use Annotated for clear Body parsing with type hints
+    data: Annotated[Dict[str, Any], Body(
+        embed=False, # Don't require data to be nested under a key
+        examples=[{"totalPrice": 49.99}] # Example for documentation
+    )]
+):
+    """
+    Creates a Stripe PaymentIntent based on the total price provided.
+    Returns the clientSecret needed by the frontend Stripe Elements.
+    """
+    try:
+        total_price = data.get('totalPrice')
+        print(f"ℹ️ Received /create-payment-intent request with totalPrice: {total_price}")
+
+        # --- Input Validation ---
+        if total_price is None:
+            print("🔴 Validation Error: 'totalPrice' missing.")
+            raise HTTPException(status_code=400, detail="Missing 'totalPrice' in request body.")
+        if not isinstance(total_price, (int, float)):
+            print("🔴 Validation Error: 'totalPrice' is not a number.")
+            raise HTTPException(status_code=400, detail="'totalPrice' must be a number.")
+        if total_price <= 0:
+             print("🔴 Validation Error: 'totalPrice' must be positive.")
+             raise HTTPException(status_code=400, detail="'totalPrice' must be greater than zero.")
+
+        # --- Calculate Amount ---
+        amount_cents = calculate_order_amount_cents(total_price)
+        print(f"💰 Calculated amount in cents: {amount_cents}")
+
+        # --- Create PaymentIntent ---
+        payment_intent = stripe.PaymentIntent.create(
+            amount=amount_cents,
+            currency='eur',  # Adjust currency if needed (e.g., 'usd')
+            # Enable automatic collection of payment methods shown by Stripe Elements
+            automatic_payment_methods={
+                'enabled': True,
+            },
+            # You can add metadata here if needed (e.g., order ID, user ID)
+            # metadata={'order_id': 'some_order_id', 'user_id': 'user_123'}
+        )
+        print(f"✅ Successfully created PaymentIntent: {payment_intent.id}")
+
+        # --- Return Client Secret ---
+        return {'clientSecret': payment_intent.client_secret}
+
+    except ValueError as ve: # Catch specific calculation errors
+        print(f"🔴 Value Error during amount calculation: {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
+    except stripe.error.StripeError as e:
+        # Handle specific Stripe API errors
+        print(f"🔴 Stripe API Error: {e.user_message}") # Log user-friendly message
+        raise HTTPException(status_code=400, detail=e.user_message or "A payment processing error occurred.")
+    except HTTPException as http_exc:
+         # Re-raise validation exceptions directly
+         raise http_exc
+    except Exception as e:
+        # Handle unexpected server errors
+        print(f"💥 Unexpected Server Error: {e}")
+        raise HTTPException(status_code=500, detail="An internal server error occurred.")
+
+
+@app.post("/process-order")
+async def process_order(
+    # Expects a list of dictionaries directly in the body
+    cart_items: Annotated[List[Dict[str, Any]], Body(
+         embed=False, # Don't require list to be nested under a key
+         examples=[[{"id": "prod_1", "name": "Canvas Print", "price": 25.50}]] # Example
+    )]
+):
+    """
+    Placeholder endpoint called after successful payment confirmation.
+    Receives the cart items. In a real app, saves order to database,
+    triggers fulfillment, sends emails, etc.
+    """
+    print("\n--- ✅ Received /process-order request ---")
+    if not cart_items:
+        print("⚠️ Received empty cart for processing.")
+        # Decide if this is an error or acceptable
+        return {"status": "warning", "message": "Order processed with empty cart."}
+
+    print("🛒 Cart Items Received:")
+    for item in cart_items:
+        # Log some details - adapt based on PushedProduct structure
+        print(f"  - ID: {item.get('id', 'N/A')}, "
+              f"Item: {item.get('item', 'N/A')}, "
+              f"Dimensions: {item.get('dimensions', 'N/A')}, "
+              f"Price: €{item.get('price', 0.0):.2f}")
+
+    # --- Placeholder for Real Actions ---
+    # 1. Verify Payment Status again (optional, more secure)
+    #    - You could potentially receive the paymentIntentId here too
+    #    - Retrieve PI from Stripe: stripe.PaymentIntent.retrieve(payment_intent_id)
+    #    - Check if status is 'succeeded' before saving
+    # 2. Save order details (cart_items, user info if available) to your database.
+    # 3. Trigger fulfillment process (e.g., notify warehouse).
+    # 4. Send confirmation email to the customer.
+    # --- End Placeholder ---
+
+    print("--- ✅ Order processing simulation complete ---")
+    return {"status": "success", "message": "Order received and processed successfully."}
 
 
 # --- CORS Middleware (Keep as before) ---
