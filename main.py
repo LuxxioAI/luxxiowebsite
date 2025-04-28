@@ -278,10 +278,3 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# --- Run Server ---
-if __name__ == "__main__":
-    print("Starting FastAPI server on http://0.0.0.0:8000")
-    if not REPLICATE_API_TOKEN:
-       print("ERROR: REPLICATE_API_TOKEN is not set. The API will likely fail.")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
