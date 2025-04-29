@@ -268,7 +268,8 @@ origins = [
     "http://localhost:3000",
     "http://localhost:8081", # For Expo Go?
     # Add your frontend domains if needed
-    "https://luxxio.netlify.app"
+    "https://luxxio.netlify.app",
+    "https://luxxio.nl"
 ]
 
 app.add_middleware(
