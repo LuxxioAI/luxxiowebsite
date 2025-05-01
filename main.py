@@ -1,19 +1,37 @@
 # ... (imports and setup remain the same) ...
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import replicate
 import logging
 import uvicorn
 # main.py
 import os
 import stripe # type: ignore # Ignore type error if stripe package typing is missing
-from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi import FastAPI, HTTPException, Body, Request, status
 from fastapi.middleware.cors import CORSMiddleware # Import CORS middleware
 from dotenv import load_dotenv
-from typing import List, Dict, Any, Annotated
+from typing import List, Dict, Any, Annotated, Optional
+from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 
+import datetime
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Firestore Configuration
+try:
+    # GOOGLE_APPLICATION_CREDENTIALS environment variable should be set
+    # either in the .env file or system environment
+    db = firestore.AsyncClient()
+    logger.info("Firestore client initialized successfully.")
+    # Use environment variable for collection name, default to 'shipments'
+    FIRESTORE_COLLECTION = os.getenv("FIRESTORE_COLLECTION_NAME", "shipments")
+except Exception as e:
+    logger.error(f"Failed to initialize Firestore client: {e}")
+    # If Firestore cannot be initialized, the app shouldn't start properly.
+    # Raising an exception might be appropriate in a real scenario,
+    # but for simplicity, we'll let it proceed and endpoints will fail.
+    db = None
 
 # --- Load Environment Variables ---
 load_dotenv()
@@ -42,6 +60,14 @@ app = FastAPI()
 class GenerateRequest(BaseModel):
     prompt: str
     aspect_ratio: str
+
+class ShipmentData(BaseModel):
+    reference: str = Field(..., example="test001") # '...' means required
+    orderid: str = Field(default="", example="") # Allow empty string, provide default
+    shipment_company: str = Field(..., example="DPD")
+    tracking_code: str = Field(..., example="05132088424538")
+    tracking_url: str = Field(..., example="https://www.dpdgroup.com/nl/mydpd/my-parcels/search?lang=nl")
+
 
 # --- Helper Function ---
 def calculate_order_amount_cents(total_price_euros: float) -> int:
@@ -261,6 +287,100 @@ async def process_order(
 
     print("--- ✅ Order processing simulation complete ---")
     return {"status": "success", "message": "Order received and processed successfully."}
+
+# --- Webhook Endpoint ---
+@app.post("/webhook/shipment", status_code=status.HTTP_201_CREATED, tags=["Webhooks"])
+async def receive_shipment_data(shipment_data: ShipmentData, request: Request):
+    """
+    Receives shipment data via POST request and stores it in Firestore.
+    Uses the 'reference' field as the Firestore document ID.
+    If a document with the same 'reference' already exists, it will be overwritten.
+    """
+    if not db:
+        logger.error("Firestore client is not available.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Firestore service is not configured or unavailable.",
+        )
+
+    try:
+        # Log received data
+        client_host = request.client.host
+        logger.info(f"Received shipment data from {client_host} for reference: {shipment_data.reference}")
+        logger.debug(f"Data: {shipment_data.model_dump_json()}") # Use model_dump_json for Pydantic v2+
+
+        # Prepare data for Firestore (include a timestamp)
+        data_to_store = shipment_data.model_dump() # Use model_dump for Pydantic v2+
+        data_to_store["received_at"] = datetime.datetime.now(datetime.timezone.utc)
+
+        # Get a reference to the document using 'reference' as the ID
+        # This allows updates if the same reference is sent again.
+        # If you want a new document every time, use db.collection(...).add() instead.
+        doc_ref = db.collection(FIRESTORE_COLLECTION).document(shipment_data.reference)
+
+        # Set the data in Firestore (creates or overwrites)
+        await doc_ref.set(data_to_store)
+
+        logger.info(f"Successfully stored/updated data for reference: {shipment_data.reference} in collection '{FIRESTORE_COLLECTION}'")
+
+        return {
+            "status": "success",
+            "message": "Shipment data received and stored successfully.",
+            "firestore_collection": FIRESTORE_COLLECTION,
+            "firestore_doc_id": doc_ref.id, # doc_ref.id will be shipment_data.reference
+        }
+
+    except Exception as e:
+        logger.exception(f"Error processing shipment data for reference {shipment_data.reference}: {e}") # Use logger.exception to include stack trace
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred while processing the data: {str(e)}",
+        )
+
+# --- Optional: Endpoint to retrieve data (for testing/verification) ---
+@app.get("/shipments/{reference_id}", status_code=status.HTTP_200_OK, tags=["Data Retrieval"])
+async def get_shipment_data(reference_id: str):
+    """Retrieves shipment data from Firestore by its reference ID."""
+    if not db:
+        logger.error("Firestore client is not available.")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Firestore service is not configured or unavailable.",
+        )
+
+    try:
+        doc_ref = db.collection(FIRESTORE_COLLECTION).document(reference_id)
+        doc_snapshot = await doc_ref.get()
+
+        if not doc_snapshot.exists:
+            logger.warning(f"Document with reference ID '{reference_id}' not found in collection '{FIRESTORE_COLLECTION}'.")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Shipment with reference '{reference_id}' not found.",
+            )
+
+        logger.info(f"Retrieved data for reference ID: {reference_id}")
+        return doc_snapshot.to_dict()
+
+    except HTTPException:
+        # Re-raise HTTPException (like 404 Not Found) directly
+        raise
+    except Exception as e:
+        logger.exception(f"Error retrieving shipment data for reference {reference_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred while retrieving the data: {str(e)}",
+        )
+
+
+# --- How to run the application (using uvicorn) ---
+# In your terminal, run:
+# uvicorn main:app --reload --host 0.0.0.0 --port 8000
+#
+# --reload : Automatically restarts the server when code changes (for development)
+# --host 0.0.0.0 : Makes the server accessible on your network
+# --port 8000 : Specifies the port number
+
 
 
 # --- CORS Middleware (Keep as before) ---
