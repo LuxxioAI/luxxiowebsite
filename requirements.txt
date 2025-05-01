@@ -5,3 +5,4 @@ hypercorn==0.14.4
 dotenv
 uvicorn
 stripe
+google-cloud-firestore>=2.10.0
