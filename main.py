@@ -18,28 +18,28 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 import datetime
-# --- Logging Setup ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 # Load .env file
 load_dotenv()
 
-# Decode the JSON and create a temporary credentials file
-credentials_path = tempfile.NamedTemporaryFile(delete=False).name
-with open(credentials_path, "w") as f:
-    credentials_json = base64.b64decode(os.getenv("GOOGLE_APPLICATION_CREDENTIALS")).decode()
-    f.write(credentials_json)
+# --- Logging Setup ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
 
-# Initialize Firestore
+# Firestore Configuration
 try:
+    # GOOGLE_APPLICATION_CREDENTIALS environment variable should be set
+    # either in the .env file or system environment
     db = firestore.AsyncClient()
+    logger.info("Firestore client initialized successfully.")
+    # Use environment variable for collection name, default to 'shipments'
     FIRESTORE_COLLECTION = os.getenv("FIRESTORE_COLLECTION_NAME", "shipments")
-    print("Firestore client initialized successfully.")
 except Exception as e:
-    print(f"Failed to initialize Firestore client: {e}")
+    logger.error(f"Failed to initialize Firestore client: {e}")
+    # If Firestore cannot be initialized, the app shouldn't start properly.
+    # Raising an exception might be appropriate in a real scenario,
+    # but for simplicity, we'll let it proceed and endpoints will fail.
     db = None
 
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
