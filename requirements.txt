@@ -6,4 +6,4 @@ dotenv
 uvicorn
 stripe
 google-cloud-firestore
-firebase-admin>=6.2.0
+firebase-admin
