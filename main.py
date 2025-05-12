@@ -28,7 +28,7 @@ load_dotenv()
 # Decode the JSON and create a temporary credentials file
 credentials_path = tempfile.NamedTemporaryFile(delete=False).name
 with open(credentials_path, "w") as f:
-    credentials_json = base64.b64decode(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_BASE64")).decode()
+    credentials_json = base64.b64decode(os.getenv("GOOGLE_APPLICATION_CREDENTIALS")).decode()
     f.write(credentials_json)
 
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
