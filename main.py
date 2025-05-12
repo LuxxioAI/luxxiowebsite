@@ -3,10 +3,6 @@ from pydantic import BaseModel, Field
 import replicate
 import logging
 import uvicorn
-import base64
-import json
-import tempfile
-from dotenv import load_dotenv
 # main.py
 import os
 import stripe # type: ignore # Ignore type error if stripe package typing is missing
@@ -19,13 +15,13 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 
 import datetime
 
-# Load .env file
+
+# --- Load Environment Variables ---
 load_dotenv()
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
 
 # Firestore Configuration
 try:
