@@ -3,6 +3,10 @@ from pydantic import BaseModel, Field
 import replicate
 import logging
 import uvicorn
+import base64
+import json
+import tempfile
+from dotenv import load_dotenv
 # main.py
 import os
 import stripe # type: ignore # Ignore type error if stripe package typing is missing
@@ -18,23 +22,26 @@ import datetime
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Firestore Configuration
+# Load .env file
+load_dotenv()
+
+# Decode the JSON and create a temporary credentials file
+credentials_path = tempfile.NamedTemporaryFile(delete=False).name
+with open(credentials_path, "w") as f:
+    credentials_json = base64.b64decode(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_BASE64")).decode()
+    f.write(credentials_json)
+
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+
+# Initialize Firestore
 try:
-    # GOOGLE_APPLICATION_CREDENTIALS environment variable should be set
-    # either in the .env file or system environment
     db = firestore.AsyncClient()
-    logger.info("Firestore client initialized successfully.")
-    # Use environment variable for collection name, default to 'shipments'
     FIRESTORE_COLLECTION = os.getenv("FIRESTORE_COLLECTION_NAME", "shipments")
+    print("Firestore client initialized successfully.")
 except Exception as e:
-    logger.error(f"Failed to initialize Firestore client: {e}")
-    # If Firestore cannot be initialized, the app shouldn't start properly.
-    # Raising an exception might be appropriate in a real scenario,
-    # but for simplicity, we'll let it proceed and endpoints will fail.
+    print(f"Failed to initialize Firestore client: {e}")
     db = None
 
-# --- Load Environment Variables ---
-load_dotenv()
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
 
 if not STRIPE_SECRET_KEY:
