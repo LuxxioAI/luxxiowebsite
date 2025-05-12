@@ -5,5 +5,5 @@ hypercorn==0.14.4
 dotenv
 uvicorn
 stripe
-google-cloud-firestore>=3.10.0
+google-cloud-firestore
 firebase-admin>=6.2.0
