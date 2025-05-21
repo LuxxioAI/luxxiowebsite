@@ -12,7 +12,6 @@ import replicate # Assuming this is used elsewhere
 from google.cloud import firestore # Assuming this is used elsewhere
 import datetime # Assuming this is used elsewhere
 
-# --- Load Environment Variables ----
 load_dotenv()
 
 # --- Logging Setup ---
