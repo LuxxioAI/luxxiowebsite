@@ -32,22 +32,67 @@ def setup_firestore_credentials():
         try:
             logger.info("Setting up Firestore credentials from Base64 environment variable...")
             
+            # Clean the Base64 string (remove any whitespace/newlines)
+            base64_key = base64_key.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+            logger.info(f"Base64 key length: {len(base64_key)} characters")
+            
             # Decode the Base64 string
-            key_data = base64.b64decode(base64_key).decode('utf-8')
-            key_json = json.loads(key_data)
+            try:
+                key_data = base64.b64decode(base64_key).decode('utf-8')
+            except Exception as decode_error:
+                logger.error(f"Base64 decode error: {decode_error}")
+                logger.error(f"First 100 chars of Base64: {base64_key[:100]}...")
+                raise
+            
+            # Parse JSON
+            try:
+                key_json = json.loads(key_data)
+            except Exception as json_error:
+                logger.error(f"JSON parse error: {json_error}")
+                logger.error(f"First 200 chars of decoded data: {key_data[:200]}...")
+                raise
+            
+            # Validate required fields
+            required_fields = ['type', 'project_id', 'private_key', 'client_email']
+            missing_fields = [field for field in required_fields if field not in key_json]
+            if missing_fields:
+                logger.error(f"Missing required fields in service account JSON: {missing_fields}")
+                raise ValueError(f"Missing required fields: {missing_fields}")
+            
+            # Log some info (without sensitive data)
+            logger.info(f"Service account email: {key_json.get('client_email')}")
+            logger.info(f"Project ID: {key_json.get('project_id')}")
+            
+            # Validate private key format
+            private_key = key_json.get('private_key', '')
+            if not private_key.startswith('-----BEGIN PRIVATE KEY-----'):
+                logger.error("Private key does not start with proper header")
+                logger.error(f"Private key starts with: {private_key[:50]}...")
+                raise ValueError("Invalid private key format")
             
             # Create a temporary file
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
-                json.dump(key_json, temp_file)
+                json.dump(key_json, temp_file, indent=2)
                 temp_file_path = temp_file.name
             
             # Set the environment variable to point to the temp file
             os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_file_path
             logger.info(f"Firestore credentials file created at: {temp_file_path}")
+            
+            # Test the credentials by trying to create a client
+            try:
+                test_client = firestore.Client()
+                logger.info("✅ Firestore credentials validated successfully")
+                test_client.close()
+            except Exception as test_error:
+                logger.error(f"❌ Firestore credentials validation failed: {test_error}")
+                raise
+            
             return temp_file_path
             
         except Exception as e:
             logger.error(f"Failed to setup Firestore credentials from Base64: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
             return None
     else:
         logger.info("No Base64 credentials found, checking for existing GOOGLE_APPLICATION_CREDENTIALS...")
@@ -154,6 +199,35 @@ async def health_check():
             "replicate": "configured" if REPLICATE_API_TOKEN else "not configured"
         }
     }
+
+# --- Debug Endpoint (Remove in production) ---
+@app.get("/debug/firestore")
+async def debug_firestore():
+    """Debug endpoint to check Firestore configuration"""
+    debug_info = {
+        "firestore_client_exists": db is not None,
+        "collection_name": FIRESTORE_COLLECTION,
+        "google_application_credentials_set": bool(os.getenv('GOOGLE_APPLICATION_CREDENTIALS')),
+        "google_application_credentials_base64_set": bool(os.getenv('GOOGLE_APPLICATION_CREDENTIALS_BASE64')),
+    }
+    
+    # Try to get the length of base64 string without exposing it
+    base64_key = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_BASE64")
+    if base64_key:
+        debug_info["base64_key_length"] = len(base64_key.strip())
+        debug_info["base64_starts_with"] = base64_key[:20] + "..."
+    
+    # Test Firestore connection
+    if db:
+        try:
+            # Try a simple operation
+            collections = await db.collections()
+            debug_info["firestore_test"] = "success"
+            debug_info["available_collections"] = [col.id async for col in collections]
+        except Exception as e:
+            debug_info["firestore_test"] = f"failed: {str(e)}"
+    
+    return debug_info
 
 # --- Image Generation Endpoint ---
 @app.post("/api/generate-images")
