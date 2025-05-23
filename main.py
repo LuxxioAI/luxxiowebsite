@@ -220,15 +220,15 @@ async def debug_firestore():
     # Test Firestore connection
     if db:
         try:
-            # Try a simple operation
-            collections = await db.collections()
+            # Fix: Use list comprehension with async generator instead of await
+            collections = [col.id async for col in db.collections()]
             debug_info["firestore_test"] = "success"
-            debug_info["available_collections"] = [col.id async for col in collections]
+            debug_info["available_collections"] = collections
         except Exception as e:
             debug_info["firestore_test"] = f"failed: {str(e)}"
     
     return debug_info
-
+    
 # --- Image Generation Endpoint ---
 @app.post("/api/generate-images")
 async def generate_multiple_images(request: GenerateRequest):
