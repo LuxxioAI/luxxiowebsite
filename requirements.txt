@@ -7,3 +7,4 @@ uvicorn
 stripe
 google-cloud-firestore
 firebase-admin
+Pillow
