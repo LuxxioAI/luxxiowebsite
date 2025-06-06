@@ -28,68 +28,36 @@ logger = logging.getLogger(__name__)
 # --- Load Environment Variables ---
 load_dotenv()
 
-# --- START OF MODIFIED SECTION (WITH ENHANCED DEBUGGING) ---
-
 def setup_google_credentials():
-    """
-    Sets up Google Cloud credentials with enhanced debugging.
-    Priority 1 (Local Dev): Looks for 'serviceAccountKey.json' in the root directory.
-    Priority 2 (Deployment): Falls back to the Base64 encoded environment variable.
-    """
     local_key_path = "serviceAccountKey.json"
-
-    # --- Enhanced Debugging Logs ---
-    current_working_directory = os.getcwd()
-    absolute_file_path = os.path.abspath(local_key_path)
-    
-    logger.info("--- [Google Credential Setup Debug] ---")
-    logger.info(f"Current Working Directory: {current_working_directory}")
-    logger.info(f"Checking for credentials file at absolute path: {absolute_file_path}")
-    try:
-        directory_contents = os.listdir(current_working_directory)
-        logger.info(f"Files/Folders in current directory: {directory_contents}")
-    except Exception as e:
-        logger.warning(f"Could not list directory contents: {e}")
-    logger.info("---------------------------------------")
-    # --- End Enhanced Debugging ---
-
-    # Priority 1: Check for local service account file for development
     if os.path.exists(local_key_path):
         logger.info(f"SUCCESS: Found '{local_key_path}'. Using it for local development credentials.")
         os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = local_key_path
         return local_key_path
-    else:
-        logger.warning(f"INFO: Local file '{local_key_path}' was NOT found in the working directory.")
-
-    # Priority 2: Check for Base64 encoded environment variable for deployment
     base64_key = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_BASE64")
     if base64_key:
         try:
             logger.info("Attempting to set up Google credentials from Base64 environment variable (for deployment)...")
             key_data = base64.b64decode(base64_key).decode('utf-8')
-            key_json = json.loads(key_data)
-
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
-                json.dump(key_json, temp_file)
+                temp_file.write(key_data)
                 temp_file_path = temp_file.name
-
             os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_file_path
             logger.info(f"SUCCESS: Google credentials file created from Base64 at: {temp_file_path}")
             return temp_file_path
         except Exception as e:
             logger.error(f"ERROR: Failed to setup Google credentials from Base64: {e}")
             return None
-
-    # If neither method works
-    logger.error("FATAL: No valid Google credentials found. Neither 'serviceAccountKey.json' was found locally nor was 'GOOGLE_APPLICATION_CREDENTIALS_BASE64' set correctly.")
+    logger.error("FATAL: No valid Google credentials found.")
     return None
 
 # --- Configuration using the setup function ---
 credentials_path = setup_google_credentials()
 
-# Initialize clients (they will be None if credentials failed)
 db = None
 FIRESTORE_COLLECTION = os.getenv("FIRESTORE_COLLECTION_NAME", "shipments")
+# --- New Constant for Generated Images Collection ---
+FIRESTORE_GENERATED_COLLECTION = "generated"
 storage_client = None
 bucket = None
 FIREBASE_STORAGE_BUCKET = os.getenv("FIREBASE_STORAGE_BUCKET")
@@ -98,7 +66,6 @@ if credentials_path:
     try:
         db = firestore.AsyncClient()
         logger.info("✅ Firestore client initialized successfully.")
-        logger.info(f"Using Firestore collection: {FIRESTORE_COLLECTION}")
     except Exception as e:
         logger.error(f"🔴 Failed to initialize Firestore client: {e}")
         db = None
@@ -116,84 +83,44 @@ if credentials_path:
 else:
     logger.error("🔴 Google credentials setup failed. Firestore and Storage clients will not be available.")
 
-# --- END OF MODIFIED SECTION ---
-
-
 # --- Stripe Configuration ---
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
-if not STRIPE_SECRET_KEY:
-    logger.error("🔴 FATAL ERROR: Stripe Secret Key not found in .env file.")
-else:
-    stripe.api_key = STRIPE_SECRET_KEY
-    logger.info("✅ Stripe API Key Loaded.")
+if not STRIPE_SECRET_KEY: logger.error("🔴 FATAL ERROR: Stripe Secret Key not found in .env file.")
+else: stripe.api_key = STRIPE_SECRET_KEY; logger.info("✅ Stripe API Key Loaded.")
 
 # --- Replicate Configuration ---
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
-if not REPLICATE_API_TOKEN:
-    logger.error("REPLICATE_API_TOKEN environment variable not set!")
-else:
-    logger.info("✅ Replicate API token found.")
+if not REPLICATE_API_TOKEN: logger.error("REPLICATE_API_TOKEN environment variable not set!")
+else: logger.info("✅ Replicate API token found.")
 
 # --- FastAPI App ---
-app = FastAPI(
-    title="Image Generation & E-commerce API",
-    description="API for image generation, payment processing, and shipment tracking",
-    version="1.0.0"
-)
+app = FastAPI(title="Image Generation & E-commerce API", version="1.0.0")
 
 # --- Pydantic Models ---
-class GenerateRequest(BaseModel):
-    prompt: str
-    aspect_ratio: str
-
-class ShipmentData(BaseModel):
-    reference: str = Field(..., example="test001")
-    orderid: str = Field(default="", example="")
-    shipment_company: str = Field(..., example="DPD")
-    tracking_code: str = Field(..., example="05132088424538")
-    tracking_url: str = Field(..., example="https://www.dpdgroup.com/nl/mydpd/my-parcels/search?lang=nl")
+class GenerateRequest(BaseModel): prompt: str; aspect_ratio: str
+class ShipmentData(BaseModel): reference: str = Field(..., example="test001"); orderid: str = Field(default=""); shipment_company: str = Field(..., example="DPD"); tracking_code: str = Field(..., example="05132088424538"); tracking_url: str = Field(..., example="https://...")
 
 # --- Helper Function ---
 def calculate_order_amount_cents(total_price_euros: float) -> int:
-    if total_price_euros <= 0:
-        raise ValueError("Total price must be positive.")
+    if total_price_euros <= 0: raise ValueError("Total price must be positive.")
     return int(round(total_price_euros * 100))
 
 # --- Root Endpoint ---
 @app.get("/")
 async def root():
-    logger.info("Root endpoint '/' accessed.")
-    return {
-        "greeting": "Hello, World!", 
-        "message": "Welcome to the Image Generation API!",
-        "firestore_status": "connected" if db else "disconnected",
-        "storage_status": "connected" if bucket else "disconnected",
-        "stripe_status": "configured" if STRIPE_SECRET_KEY else "not configured",
-        "replicate_status": "configured" if REPLICATE_API_TOKEN else "not configured"
-    }
+    return {"greeting": "Hello, World!", "message": "Welcome to the Image Generation API!", "firestore_status": "connected" if db else "disconnected", "storage_status": "connected" if bucket else "disconnected", "stripe_status": "configured" if STRIPE_SECRET_KEY else "not configured", "replicate_status": "configured" if REPLICATE_API_TOKEN else "not configured"}
 
 # --- Health Check Endpoint ---
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "services": {
-            "firestore": "connected" if db else "disconnected",
-            "storage": "connected" if bucket else "disconnected",
-            "stripe": "configured" if STRIPE_SECRET_KEY else "not configured",
-            "replicate": "configured" if REPLICATE_API_TOKEN else "not configured"
-        }
-    }
+    return {"status": "healthy", "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(), "services": { "firestore": "connected" if db else "disconnected", "storage": "connected" if bucket else "disconnected", "stripe": "configured" if STRIPE_SECRET_KEY else "not configured", "replicate": "configured" if REPLICATE_API_TOKEN else "not configured"}}
 
 # --- Firebase Storage Upload Helper ---
-def upload_to_firebase_storage(file_bytes: bytes, destination_blob_name: str, content_type: str = 'image/png') -> Optional[str]:
-    if not bucket:
-        logger.error("Firebase Storage bucket not configured. Cannot upload.")
-        return None
+def upload_to_firebase_storage(file_bytes: bytes, destination_blob_name: str, content_type: str) -> Optional[str]:
+    if not bucket: logger.error("Firebase Storage bucket not configured. Cannot upload."); return None
     try:
         blob = bucket.blob(destination_blob_name)
-        blob.upload_from_string(file_bytes, content_type=content_type)
+        blob.upload_from_string(file_bytes, content_type=content_type, timeout=300)
         blob.make_public()
         logger.info(f"Successfully uploaded {destination_blob_name} to {bucket.name}.")
         return blob.public_url
@@ -204,10 +131,9 @@ def upload_to_firebase_storage(file_bytes: bytes, destination_blob_name: str, co
 # --- Image Generation Endpoint ---
 @app.post("/api/generate-images")
 async def generate_multiple_images(request: GenerateRequest):
-    if not REPLICATE_API_TOKEN:
-        raise HTTPException(status_code=503, detail="Replicate API is not configured")
-    if not bucket:
-        raise HTTPException(status_code=503, detail="Image storage service is not configured")
+    if not REPLICATE_API_TOKEN: raise HTTPException(status_code=503, detail="Replicate API is not configured")
+    if not bucket: raise HTTPException(status_code=503, detail="Image storage service is not configured")
+    if not db: raise HTTPException(status_code=503, detail="Database service is not configured")
 
     try:
         watermark_image = Image.open("watermark.png").convert("RGBA")
@@ -228,50 +154,59 @@ async def generate_multiple_images(request: GenerateRequest):
         try:
             output = replicate.run(
                 "black-forest-labs/flux-1.1-pro",
-                input={
-                    "prompt": request.prompt,
-                    "aspect_ratio": request.aspect_ratio,
-                    "output_format": "png", "output_quality": 80,
-                    "safety_tolerance": 2, "prompt_upsampling": True
-                }
+                input={"prompt": request.prompt, "aspect_ratio": request.aspect_ratio, "output_format": "png", "output_quality": 80, "safety_tolerance": 2, "prompt_upsampling": True}
             )
             
             temp_image_url = str(output[0]) if isinstance(output, list) and output else str(output)
-
-            if not (temp_image_url and temp_image_url.startswith('https')):
-                raise ValueError(f"Invalid temporary URL received: {temp_image_url}")
-            
+            if not (temp_image_url and temp_image_url.startswith('https')): raise ValueError(f"Invalid temporary URL received: {temp_image_url}")
             logger.info(f"Generation {i+1} successful, got temp URL: {temp_image_url}")
 
-            response = requests.get(temp_image_url)
-            response.raise_for_status()
+            response = requests.get(temp_image_url); response.raise_for_status()
             original_image_bytes = response.content
-
             base_image = Image.open(io.BytesIO(original_image_bytes)).convert("RGBA")
+
+            # --- Process Original Image (No Watermark) ---
+            original_rgb = base_image.convert('RGB')
+            with io.BytesIO() as original_output_bytes:
+                original_rgb.save(original_output_bytes, format="JPEG")
+                original_jpeg_bytes = original_output_bytes.getvalue()
+
+            # --- Process Watermarked Image ---
             watermarked_image = base_image.copy()
-
             padding = 20
-            wm_w, wm_h = watermark_image.size
-            base_w, base_h = watermarked_image.size
-            position = (base_w - wm_w - padding, base_h - wm_h - padding)
+            position = (base_image.width - watermark_image.width - padding, base_image.height - watermark_image.height - padding)
             watermarked_image.paste(watermark_image, position, watermark_image)
+            watermarked_rgb = watermarked_image.convert('RGB')
+            with io.BytesIO() as watermarked_output_bytes:
+                watermarked_rgb.save(watermarked_output_bytes, format="JPEG")
+                watermarked_jpeg_bytes = watermarked_output_bytes.getvalue()
 
-            with io.BytesIO() as output_bytes:
-                watermarked_image.save(output_bytes, format="PNG")
-                watermarked_image_bytes = output_bytes.getvalue()
-
+            # --- Upload to Firebase Storage ---
             unique_id = uuid.uuid4()
-            original_filename = f"generated/original_{unique_id}.png"
-            watermarked_filename = f"generated/watermarked_{unique_id}.png"
+            original_filename = f"generated/original_{unique_id}.jpg"
+            watermarked_filename = f"generated/watermarked_{unique_id}.jpg"
             
-            original_fb_url = upload_to_firebase_storage(original_image_bytes, original_filename)
-            watermarked_fb_url = upload_to_firebase_storage(watermarked_image_bytes, watermarked_filename)
+            original_fb_url = upload_to_firebase_storage(original_jpeg_bytes, original_filename, 'image/jpeg')
+            watermarked_fb_url = upload_to_firebase_storage(watermarked_jpeg_bytes, watermarked_filename, 'image/jpeg')
 
+            # --- Save Original URL to Firestore (if upload was successful) ---
+            if original_fb_url:
+                try:
+                    generated_data = {
+                        "url": original_fb_url,
+                        "prompt": request.prompt,
+                        "aspectRatio": request.aspect_ratio,
+                        "createdAt": datetime.datetime.now(datetime.timezone.utc)
+                    }
+                    await db.collection(FIRESTORE_GENERATED_COLLECTION).add(generated_data)
+                    logger.info(f"Saved original image URL to Firestore collection '{FIRESTORE_GENERATED_COLLECTION}'.")
+                except Exception as e:
+                    # Log the error but don't fail the entire request
+                    logger.error(f"Failed to save image URL to Firestore: {e}")
+            
+            # --- Collect results for frontend response ---
             if original_fb_url and watermarked_fb_url:
-                processed_images.append({
-                    "originalUrl": original_fb_url,
-                    "watermarkedUrl": watermarked_fb_url
-                })
+                processed_images.append({"originalUrl": original_fb_url, "watermarkedUrl": watermarked_fb_url})
                 success_count += 1
                 logger.info(f"Generation {i+1} fully processed and uploaded to Firebase Storage.")
             else:
@@ -283,11 +218,7 @@ async def generate_multiple_images(request: GenerateRequest):
             errors.append(error_msg)
 
     if not processed_images:
-        logger.error(f"Failed to generate any valid images for prompt: '{request.prompt}'. Errors: {errors}")
-        raise HTTPException(
-            status_code=500,
-            detail={"message": "Image generation failed.", "errors": errors}
-        )
+        raise HTTPException(status_code=500, detail={"message": "Image generation failed.", "errors": errors})
 
     logger.info(f"Successfully generated and processed {success_count}/{generation_attempts} images.")
     return {"images": processed_images}
@@ -295,9 +226,7 @@ async def generate_multiple_images(request: GenerateRequest):
 # --- Payment Intent Endpoint ---
 @app.post("/create-payment-intent")
 async def create_payment_intent(data: Annotated[Dict[str, Any], Body(embed=False)]):
-    # ... (rest of the code is unchanged)
-    if not STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured")
+    if not STRIPE_SECRET_KEY: raise HTTPException(status_code=503, detail="Payment processing is not configured")
     try:
         total_price = data.get('totalPrice')
         if total_price is None: raise HTTPException(status_code=400, detail="Missing 'totalPrice'")
@@ -306,13 +235,11 @@ async def create_payment_intent(data: Annotated[Dict[str, Any], Body(embed=False
         amount_cents = calculate_order_amount_cents(total_price)
         payment_intent = stripe.PaymentIntent.create(amount=amount_cents, currency='eur', automatic_payment_methods={'enabled': True})
         return {'clientSecret': payment_intent.client_secret}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
 # --- Process Order Endpoint ---
 @app.post("/process-order")
 async def process_order(cart_items: Annotated[List[Dict[str, Any]], Body(embed=False)]):
-    # ... (rest of the code is unchanged)
     logger.info("--- ✅ Received /process-order request ---")
     if not cart_items: return {"status": "warning", "message": "Order processed with empty cart."}
     logger.info("🛒 Cart Items Received:")
@@ -322,7 +249,6 @@ async def process_order(cart_items: Annotated[List[Dict[str, Any]], Body(embed=F
 # --- Webhook Endpoint ---
 @app.post("/webhook/shipment", status_code=status.HTTP_201_CREATED, tags=["Webhooks"])
 async def receive_shipment_data(shipment_data: ShipmentData, request: Request):
-    # ... (rest of the code is unchanged)
     if not db: raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Firestore service unavailable.")
     try:
         data_to_store = shipment_data.model_dump()
@@ -330,36 +256,22 @@ async def receive_shipment_data(shipment_data: ShipmentData, request: Request):
         doc_ref = db.collection(FIRESTORE_COLLECTION).document(shipment_data.reference)
         await doc_ref.set(data_to_store)
         return {"status": "success", "message": "Data received.", "doc_id": doc_ref.id}
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except Exception as e: raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 # --- Optional: Endpoint to retrieve data ---
 @app.get("/shipments/{reference_id}", status_code=status.HTTP_200_OK, tags=["Data Retrieval"])
 async def get_shipment_data(reference_id: str):
-    # ... (rest of the code is unchanged)
     if not db: raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Firestore service unavailable.")
     try:
         doc_ref = db.collection(FIRESTORE_COLLECTION).document(reference_id)
         doc = await doc_ref.get()
         if not doc.exists: raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found.")
         return doc.to_dict()
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except Exception as e: raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 # --- CORS Middleware ---
-origins = [
-    "http://localhost:3000",
-    "http://localhost:8081",
-    "https://luxxio.netlify.app",
-    "https://luxxio.nl"
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+origins = ["http://localhost:3000", "http://localhost:8081", "https://luxxio.netlify.app", "https://luxxio.nl"]
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
