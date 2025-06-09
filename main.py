@@ -236,7 +236,7 @@ async def generate_multiple_images(request: GenerateRequest):
             
             temp_image_url = str(output[0]) if isinstance(output, list) and output else str(output)
 
-            if not (temp_image_url and temp_image_url.startswith('https')):
+            if not (temp_image_url and temp_image_url.startswith('http')):
                 raise ValueError(f"Invalid temporary URL received: {temp_image_url}")
             
             logger.info(f"Generation {i+1} successful, got temp URL: {temp_image_url}")
@@ -290,7 +290,7 @@ async def generate_multiple_images(request: GenerateRequest):
     logger.info(f"Successfully generated and processed {success_count}/{generation_attempts} images.")
     return {"images": processed_images}
 
-# --- NEW UPSCALING ENDPOINT ---
+# --- UPDATED UPSCALING ENDPOINT ---
 @app.post("/api/upscale-image", response_model=UpscaleResponse, tags=["Image Processing"])
 async def upscale_image(request: UpscaleRequest):
     """
@@ -314,19 +314,22 @@ async def upscale_image(request: UpscaleRequest):
         }
         logger.info(f"Calling Replicate 'google/upscaler' with input: {input_data}")
         
-        # The model returns a temporary URL to the generated image
-        temp_upscaled_url = replicate.run("google/upscaler", input=input_data)
-        
-        if not temp_upscaled_url or not isinstance(temp_upscaled_url, str):
-            logger.error("Replicate service did not return a valid URL string.")
+        output = replicate.run("google/upscaler", input=input_data)
+        logger.info(f"Replicate 'google/upscaler' raw output: {output}")
+
+        # 2. Robustly extract the URL from the output
+        temp_upscaled_url = str(output[0]) if isinstance(output, list) and output else str(output)
+
+        if not (temp_upscaled_url and temp_upscaled_url.startswith('http')):
+            logger.error(f"Replicate service did not return a valid URL. Extracted value: {temp_upscaled_url}")
             raise HTTPException(status_code=502, detail="Upscaling service returned an invalid result.")
         
-        logger.info(f"Replicate returned temporary URL: {temp_upscaled_url}")
+        logger.info(f"Successfully extracted temporary URL: {temp_upscaled_url}")
 
-        # 2. Download the upscaled image from the temporary URL
+        # 3. Download the upscaled image from the temporary URL
         logger.info("Downloading upscaled image from temporary URL...")
         response = requests.get(temp_upscaled_url)
-        response.raise_for_status()  # Will raise an exception for 4xx/5xx responses
+        response.raise_for_status()
         upscaled_image_bytes = response.content
 
         if not upscaled_image_bytes:
@@ -335,7 +338,7 @@ async def upscale_image(request: UpscaleRequest):
         
         logger.info(f"Successfully downloaded upscaled image (size: {len(upscaled_image_bytes)} bytes).")
 
-        # 3. Create a unique filename and upload to Firebase Storage
+        # 4. Create a unique filename and upload to Firebase Storage
         original_path = urlparse(str(request.image_url)).path
         original_filename_base = os.path.splitext(os.path.basename(original_path))[0]
         sanitized_name = ''.join(c for c in original_filename_base if c.isalnum() or c in ('-', '_')).rstrip()
@@ -355,7 +358,7 @@ async def upscale_image(request: UpscaleRequest):
         
         logger.info(f"Upload complete. New public URL: {public_url}")
 
-        # 4. Create a record in the 'upscaled' collection in Firestore
+        # 5. Create a record in the 'upscaled' collection in Firestore
         doc_id = uuid.uuid4().hex
         firestore_payload = {
             "original_url": str(request.image_url),
@@ -370,7 +373,7 @@ async def upscale_image(request: UpscaleRequest):
         doc_ref = db.collection("upscaled").document(doc_id)
         await doc_ref.set(firestore_payload)
         
-        # 5. Return the permanent public URL and Firestore doc ID
+        # 6. Return the permanent public URL and Firestore doc ID
         return UpscaleResponse(
             upscaledImageUrl=public_url,
             firestore_doc_id=doc_id
