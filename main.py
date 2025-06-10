@@ -79,9 +79,10 @@ def setup_google_credentials():
 # --- Configuration using the setup function ---
 credentials_path = setup_google_credentials()
 
-# Initialize clients (they will be None if credentials failed)
 db = None
 FIRESTORE_COLLECTION = os.getenv("FIRESTORE_COLLECTION_NAME", "shipments")
+# --- New Constant for Generated Images Collection ---
+FIRESTORE_GENERATED_COLLECTION = "generated"
 storage_client = None
 bucket = None
 FIREBASE_STORAGE_BUCKET = os.getenv("FIREBASE_STORAGE_BUCKET")
@@ -90,7 +91,6 @@ if credentials_path:
     try:
         db = firestore.AsyncClient()
         logger.info("✅ Firestore client initialized successfully.")
-        logger.info(f"Using Firestore collection: {FIRESTORE_COLLECTION}")
     except Exception as e:
         logger.error(f"🔴 Failed to initialize Firestore client: {e}")
         db = None
@@ -108,6 +108,7 @@ if credentials_path:
 else:
     logger.error("🔴 Google credentials setup failed. Firestore and Storage clients will not be available.")
 
+# --- END OF MODIFIED SECTION ---
 
 # --- Stripe Configuration ---
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
@@ -200,7 +201,7 @@ async def health_check():
     }
 
 # --- Image Generation Endpoint ---
-@app.post("/api/generate-images", tags=["Image Processing"])
+@app.post("/api/generate-images")
 async def generate_multiple_images(request: GenerateRequest):
     if not REPLICATE_API_TOKEN:
         raise HTTPException(status_code=503, detail="Replicate API is not configured")
@@ -236,7 +237,7 @@ async def generate_multiple_images(request: GenerateRequest):
             
             temp_image_url = str(output[0]) if isinstance(output, list) and output else str(output)
 
-            if not (temp_image_url and temp_image_url.startswith('http')):
+            if not (temp_image_url and temp_image_url.startswith('https')):
                 raise ValueError(f"Invalid temporary URL received: {temp_image_url}")
             
             logger.info(f"Generation {i+1} successful, got temp URL: {temp_image_url}")
@@ -265,11 +266,24 @@ async def generate_multiple_images(request: GenerateRequest):
             original_fb_url = upload_to_firebase_storage(original_image_bytes, original_filename)
             watermarked_fb_url = upload_to_firebase_storage(watermarked_image_bytes, watermarked_filename)
 
+            # --- Save Original URL to Firestore (if upload was successful) ---
+            if original_fb_url:
+                try:
+                    generated_data = {
+                        "url": original_fb_url,
+                        "prompt": request.prompt,
+                        "aspectRatio": request.aspect_ratio,
+                        "createdAt": datetime.datetime.now(datetime.timezone.utc)
+                    }
+                    await db.collection(FIRESTORE_GENERATED_COLLECTION).add(generated_data)
+                    logger.info(f"Saved original image URL to Firestore collection '{FIRESTORE_GENERATED_COLLECTION}'.")
+                except Exception as e:
+                    # Log the error but don't fail the entire request
+                    logger.error(f"Failed to save image URL to Firestore: {e}")
+            
+            # --- Collect results for frontend response ---
             if original_fb_url and watermarked_fb_url:
-                processed_images.append({
-                    "originalUrl": original_fb_url,
-                    "watermarkedUrl": watermarked_fb_url
-                })
+                processed_images.append({"originalUrl": original_fb_url, "watermarkedUrl": watermarked_fb_url})
                 success_count += 1
                 logger.info(f"Generation {i+1} fully processed and uploaded to Firebase Storage.")
             else:
