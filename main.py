@@ -457,12 +457,27 @@ async def create_payment_intent(
 
         logger.info(f"💰 Calculated amount in cents: {amount_cents}")
 
-        # --- Create PaymentIntent ---
+        # --- START OF CHANGE ---
+        # OLD aPPROACH:
+        # payment_intent = stripe.PaymentIntent.create(
+        #     amount=amount_cents, 
+        #     currency='eur', 
+        #     automatic_payment_methods={'enabled': True}
+        # )
+
+        # NEW, EXPLICIT APPROACH:
+        # We now explicitly list the payment methods we want to support.
+        # Stripe's frontend (PaymentElement) will automatically show the correct UI.
         payment_intent = stripe.PaymentIntent.create(
             amount=amount_cents,
-            currency='eur',
-            automatic_payment_methods={'enabled': True},
+            currency='eur',  # iDEAL only works with EUR
+            payment_method_types=[
+                'card',
+                'ideal', # <-- Add iDEAL here
+                # You can add other methods like 'bancontact', 'sofort', etc.
+            ],
         )
+        # --- END OF CHANGE ---
         logger.info(f"✅ Successfully created PaymentIntent: {payment_intent.id}")
 
         # --- Return Client Secret ---
