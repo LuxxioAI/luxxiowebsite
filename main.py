@@ -390,20 +390,73 @@ async def upscale_image(request: UpscaleRequest):
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
 
 # --- Payment Intent Endpoint ---
-@app.post("/create-payment-intent", tags=["Payments"])
-async def create_payment_intent(data: Annotated[Dict[str, Any], Body(embed=False)]):
+@app.post("/create-payment-intent")
+async def create_payment_intent(
+    # Use Annotated for clear Body parsing with type hints
+    data: Annotated[Dict[str, Any], Body(
+        embed=False, # Don't require data to be nested under a key
+        examples=[{"totalPrice": 49.99}] # Example for documentation
+    )]
+):
+    """
+    Creates a Stripe PaymentIntent based on the total price provided.
+    Returns the clientSecret needed by the frontend Stripe Elements.
+    """
     if not STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured")
+        raise HTTPException(
+            status_code=503,
+            detail="Payment processing is not configured"
+        )
+    
     try:
         total_price = data.get('totalPrice')
-        if total_price is None: raise HTTPException(status_code=400, detail="Missing 'totalPrice'")
-        if not isinstance(total_price, (int, float)): raise HTTPException(status_code=400, detail="'totalPrice' must be a number.")
-        if total_price <= 0: raise HTTPException(status_code=400, detail="'totalPrice' must be > 0.")
+        logger.info(f"ℹ️ Received /create-payment-intent request with totalPrice: {total_price}")
+
+        # --- Input Validation ---
+        if total_price is None:
+            logger.warning("🔴 Validation Error: 'totalPrice' missing.")
+            raise HTTPException(status_code=400, detail="Missing 'totalPrice' in request body.")
+        if not isinstance(total_price, (int, float)):
+            logger.warning("🔴 Validation Error: 'totalPrice' is not a number.")
+            raise HTTPException(status_code=400, detail="'totalPrice' must be a number.")
+        if total_price <= 0:
+             logger.warning("🔴 Validation Error: 'totalPrice' must be positive.")
+             raise HTTPException(status_code=400, detail="'totalPrice' must be greater than zero.")
+
+        # --- Calculate Amount ---
         amount_cents = calculate_order_amount_cents(total_price)
-        payment_intent = stripe.PaymentIntent.create(amount=amount_cents, currency='eur', automatic_payment_methods={'enabled': True})
+        logger.info(f"💰 Calculated amount in cents: {amount_cents}")
+
+        # --- Create PaymentIntent ---
+        payment_intent = stripe.PaymentIntent.create(
+            amount=amount_cents,
+            currency='eur',  # Adjust currency if needed (e.g., 'usd')
+            # Enable automatic collection of payment methods shown by Stripe Elements
+            automatic_payment_methods={
+                'enabled': True,
+            },
+            # You can add metadata here if needed (e.g., order ID, user ID)
+            # metadata={'order_id': 'some_order_id', 'user_id': 'user_123'}
+        )
+        logger.info(f"✅ Successfully created PaymentIntent: {payment_intent.id}")
+
+        # --- Return Client Secret ---
         return {'clientSecret': payment_intent.client_secret}
+
+    except ValueError as ve: # Catch specific calculation errors
+        logger.error(f"🔴 Value Error during amount calculation: {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
+    except stripe.error.StripeError as e:
+        # Handle specific Stripe API errors
+        logger.error(f"🔴 Stripe API Error: {e.user_message}") # Log user-friendly message
+        raise HTTPException(status_code=400, detail=e.user_message or "A payment processing error occurred.")
+    except HTTPException as http_exc:
+         # Re-raise validation exceptions directly
+         raise http_exc
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Handle unexpected server errors
+        logger.error(f"💥 Unexpected Server Error: {e}")
+        raise HTTPException(status_code=500, detail="An internal server error occurred.")
 
 # --- Process Order Endpoint ---
 @app.post("/process-order", tags=["Orders"])
