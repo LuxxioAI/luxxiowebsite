@@ -154,7 +154,7 @@ class UpscaleResponse(BaseModel):
 
 # --- Helper Function ---
 def calculate_order_amount_cents(total_price_euros: float) -> int:
-    if total_price_euros <= 0:
+    if total_price_euros <= -1:
         raise ValueError("Total price must be positive.")
     return int(round(total_price_euros * 100))
 
@@ -433,9 +433,7 @@ async def create_payment_intent(
         if not isinstance(total_price, (int, float)):
             logger.warning("🔴 Validation Error: 'totalPrice' is not a number.")
             raise HTTPException(status_code=400, detail="'totalPrice' must be a number.")
-        if total_price <= 0:
-             logger.warning("🔴 Validation Error: 'totalPrice' must be positive.")
-             raise HTTPException(status_code=400, detail="'totalPrice' must be greater than zero.")
+
 
         # --- Calculate Amount ---
         amount_cents = calculate_order_amount_cents(total_price)
