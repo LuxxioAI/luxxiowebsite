@@ -409,12 +409,13 @@ async def create_payment_intent(
     # Use Annotated for clear Body parsing with type hints
     data: Annotated[Dict[str, Any], Body(
         embed=False, # Don't require data to be nested under a key
-        examples=[{"totalPrice": 49.99}] # Example for documentation
+        examples=[{"totalPrice": 49.99}, {"totalPrice": 0}] # Example for documentation
     )]
 ):
     """
-    Creates a Stripe PaymentIntent based on the total price provided.
-    Returns the clientSecret needed by the frontend Stripe Elements.
+    Creates a Stripe PaymentIntent for prices greater than zero.
+    For a $0 price, it returns a special signal to bypass the payment flow.
+    Returns a clientSecret or a 'free_order' signal.
     """
     if not STRIPE_SECRET_KEY:
         raise HTTPException(
@@ -433,42 +434,53 @@ async def create_payment_intent(
         if not isinstance(total_price, (int, float)):
             logger.warning("🔴 Validation Error: 'totalPrice' is not a number.")
             raise HTTPException(status_code=400, detail="'totalPrice' must be a number.")
+        if total_price < 0:
+            logger.warning(f"🔴 Validation Error: 'totalPrice' cannot be negative. Value: {total_price}")
+            raise HTTPException(status_code=400, detail="'totalPrice' cannot be negative.")
 
+        # --- Handle $0 Purchase ---
+        # If the total price is exactly 0, we don't need to go to Stripe.
+        # We return a special value that the frontend can use to identify a free order
+        # and skip the stripe.confirmPayment() step.
+        if total_price == 0:
+            logger.info("✅ Detected a $0 purchase. Bypassing Stripe. Returning 'free_order' signal.")
+            return {'clientSecret': 'free_order'}
 
-        # --- Calculate Amount ---
+        # --- Handle Paid Purchase (price > 0) ---
         amount_cents = calculate_order_amount_cents(total_price)
+
+        # Stripe has a minimum charge amount (e.g., €0.50). This check prevents API errors.
+        MINIMUM_CHARGE_CENTS = 50 
+        if amount_cents < MINIMUM_CHARGE_CENTS:
+             logger.warning(f"🔴 Validation Error: Amount {amount_cents} cents is below Stripe's minimum of {MINIMUM_CHARGE_CENTS} cents.")
+             raise HTTPException(status_code=400, detail=f"The order total is below the minimum chargeable amount of €{MINIMUM_CHARGE_CENTS/100:.2f}.")
+
         logger.info(f"💰 Calculated amount in cents: {amount_cents}")
 
         # --- Create PaymentIntent ---
         payment_intent = stripe.PaymentIntent.create(
             amount=amount_cents,
-            currency='eur',  # Adjust currency if needed (e.g., 'usd')
-            # Enable automatic collection of payment methods shown by Stripe Elements
-            automatic_payment_methods={
-                'enabled': True,
-            },
-            # You can add metadata here if needed (e.g., order ID, user ID)
-            # metadata={'order_id': 'some_order_id', 'user_id': 'user_123'}
+            currency='eur',
+            automatic_payment_methods={'enabled': True},
         )
         logger.info(f"✅ Successfully created PaymentIntent: {payment_intent.id}")
 
         # --- Return Client Secret ---
         return {'clientSecret': payment_intent.client_secret}
 
-    except ValueError as ve: # Catch specific calculation errors
+    except ValueError as ve: # Catches negative price from the helper
         logger.error(f"🔴 Value Error during amount calculation: {ve}")
         raise HTTPException(status_code=400, detail=str(ve))
     except stripe.error.StripeError as e:
-        # Handle specific Stripe API errors
-        logger.error(f"🔴 Stripe API Error: {e.user_message}") # Log user-friendly message
+        logger.error(f"🔴 Stripe API Error: {e.user_message}")
         raise HTTPException(status_code=400, detail=e.user_message or "A payment processing error occurred.")
     except HTTPException as http_exc:
          # Re-raise validation exceptions directly
          raise http_exc
     except Exception as e:
-        # Handle unexpected server errors
         logger.error(f"💥 Unexpected Server Error: {e}")
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
+
 
 # --- Process Order Endpoint ---
 @app.post("/process-order", tags=["Orders"])
