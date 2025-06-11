@@ -153,7 +153,7 @@ class UpscaleResponse(BaseModel):
     firestore_doc_id: str = Field(..., description="The ID of the document created in the 'upscaled' collection in Firestore.")
 
 
-# +++ NEW MODEL FOR VERIFY PAYMENT INTENT +++
+# +++ NEW MODEL FOR VERIFY PAYMENT INTENT ++++
 class VerifyPaymentRequest(BaseModel):
     payment_intent_id: str = Field(..., description="The ID of the Stripe Payment Intent to verify.", example="pi_123abc...")
 
