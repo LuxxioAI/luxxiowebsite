@@ -496,6 +496,65 @@ async def create_payment_intent(
         logger.error(f"💥 Unexpected Server Error: {e}")
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
 
+# +++ NEW ENDPOINT TO VERIFY PAYMENT INTENT +++
+@app.post("/verify-payment-intent", tags=["Payments"])
+async def verify_payment_intent(request: VerifyPaymentRequest):
+    """
+    Verifies the status of a Stripe PaymentIntent by its ID.
+    This is a crucial server-side step to securely confirm a payment's success
+    before fulfilling an order.
+    """
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Payment processing is not configured"
+        )
+    
+    payment_intent_id = request.payment_intent_id
+    logger.info(f"ℹ️ Received request to verify PaymentIntent: {payment_intent_id}")
+
+    # --- Input Validation ---
+    if not payment_intent_id or not payment_intent_id.startswith("pi_"):
+        logger.warning(f"🔴 Validation Error: Invalid PaymentIntent ID format received: {payment_intent_id}")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid PaymentIntent ID format."
+        )
+
+    try:
+        # --- Retrieve PaymentIntent from Stripe ---
+        # This is the source of truth. Never trust the status from the client/URL.
+        payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+        
+        logger.info(f"✅ Successfully retrieved PaymentIntent {payment_intent.id}. Current status: {payment_intent.status}")
+
+        # --- Return relevant data to the frontend ---
+        return {
+            "status": payment_intent.status,
+            "amount": payment_intent.amount,
+            "currency": payment_intent.currency
+        }
+
+    except stripe.error.InvalidRequestError as e:
+        # This error typically means the PaymentIntent ID does not exist.
+        logger.error(f"🔴 Stripe Error: PaymentIntent '{payment_intent_id}' not found. {e}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Payment confirmation not found."
+        )
+    except stripe.error.StripeError as e:
+        # Handle other potential Stripe API errors (e.g., authentication, network).
+        logger.error(f"🔴 Stripe API Error while verifying PI '{payment_intent_id}': {e}")
+        raise HTTPException(
+            status_code=502, # Bad Gateway, as we had an issue with an upstream service
+            detail="There was an error communicating with the payment processor."
+        )
+    except Exception as e:
+        logger.error(f"💥 Unexpected Server Error while verifying PI '{payment_intent_id}': {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="An internal server error occurred."
+        )
 
 # --- Process Order Endpoint ---
 @app.post("/process-order", tags=["Orders"])
