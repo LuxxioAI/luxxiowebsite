@@ -152,6 +152,11 @@ class UpscaleResponse(BaseModel):
     upscaledImageUrl: HttpUrl = Field(..., description="The new, permanent URL of the upscaled image in Firebase Storage.")
     firestore_doc_id: str = Field(..., description="The ID of the document created in the 'upscaled' collection in Firestore.")
 
+
+# +++ NEW MODEL FOR VERIFY PAYMENT INTENT +++
+class VerifyPaymentRequest(BaseModel):
+    payment_intent_id: str = Field(..., description="The ID of the Stripe Payment Intent to verify.", example="pi_123abc...")
+
 # --- Helper Function ---
 def calculate_order_amount_cents(total_price_euros: float) -> int:
     if total_price_euros <= -1:
