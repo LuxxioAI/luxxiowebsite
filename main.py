@@ -239,7 +239,7 @@ async def generate_multiple_images(request: GenerateRequest):
                 input={
                     "prompt": request.prompt,
                     "aspect_ratio": request.aspect_ratio,
-                    "output_format": "png", "output_quality": 80,
+                    "output_format": "jpg", "output_quality": 80,
                     "safety_tolerance": 2, "prompt_upsampling": True
                 }
             )
@@ -370,14 +370,14 @@ async def upscale_image(request: UpscaleRequest):
         original_path = urlparse(str(request.image_url)).path
         original_filename_base = os.path.splitext(os.path.basename(original_path))[0]
         sanitized_name = ''.join(c for c in original_filename_base if c.isalnum() or c in ('-', '_')).rstrip()
-        destination_blob_name = f"upscaled/{sanitized_name}_upscaled_{request.upscale_factor}_{uuid.uuid4().hex[:8]}.png"
+        destination_blob_name = f"upscaled/{sanitized_name}_upscaled_{request.upscale_factor}_{uuid.uuid4().hex[:8]}.jpg"
         
         logger.info(f"Uploading upscaled image to Firebase Storage as: {destination_blob_name}")
         
         public_url = upload_to_firebase_storage(
             file_bytes=upscaled_image_bytes,
             destination_blob_name=destination_blob_name,
-            content_type='image/png'
+            content_type='image/jpg'
         )
 
         if not public_url:
