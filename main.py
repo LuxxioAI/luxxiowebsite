@@ -214,8 +214,12 @@ async def generate_multiple_images(request: GenerateRequest):
         raise HTTPException(status_code=503, detail="Image storage service is not configured")
 
     try:
-        watermark_image = Image.open("watermark.png").convert("RGBA")
-        logger.info("Watermark image 'watermark.png' loaded successfully.")
+        # Load the base watermark and prepare it with 50% opacity
+        base_watermark = Image.open("watermark.png").convert("RGBA")
+        r, g, b, a = base_watermark.split()
+        a = a.point(lambda i: int(i * 0.5))  # Apply 50% opacity to the alpha channel
+        watermark_image = Image.merge('RGBA', (r, g, b, a))
+        logger.info("Watermark image 'watermark.png' loaded and opacity set to 50%.")
     except FileNotFoundError:
         logger.error("FATAL: 'watermark.png' not found. Cannot process images.")
         raise HTTPException(status_code=500, detail="Server is missing required watermark resource.")
@@ -254,10 +258,15 @@ async def generate_multiple_images(request: GenerateRequest):
             base_image = Image.open(io.BytesIO(original_image_bytes)).convert("RGBA")
             watermarked_image = base_image.copy()
 
-            padding = 20
+            # --- Centered Watermarking Logic ---
             wm_w, wm_h = watermark_image.size
             base_w, base_h = watermarked_image.size
-            position = (base_w - wm_w - padding, base_h - wm_h - padding)
+            
+            # Calculate the top-left coordinate to center the watermark
+            position = ((base_w - wm_w) // 2, (base_h - wm_h) // 2)
+            
+            # Paste the semi-transparent watermark onto the image.
+            # The third argument `watermark_image` uses its own alpha channel as the mask.
             watermarked_image.paste(watermark_image, position, watermark_image)
 
             with io.BytesIO() as output_bytes:
